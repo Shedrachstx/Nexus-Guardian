@@ -59,6 +59,7 @@ Nexus Guardian provides a robust, multi-signature enabled platform for managing 
 - `u108` - Transaction expired
 - `u109` - Invalid guardian
 - `u110` - Guardian limit reached
+- `u111` - Invalid asset type
 
 ## Usage Example
 
