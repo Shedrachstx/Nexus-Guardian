@@ -15,11 +15,22 @@
 (define-constant ERR_INVALID_GUARDIAN (err u109))
 (define-constant ERR_GUARDIAN_LIMIT_REACHED (err u110))
 (define-constant ERR_INVALID_ASSET_TYPE (err u111))
+(define-constant ERR_RECOVERY_NOT_INITIATED (err u112))
+(define-constant ERR_RECOVERY_ALREADY_INITIATED (err u113))
+(define-constant ERR_RECOVERY_TOO_EARLY (err u114))
+(define-constant ERR_RECOVERY_EXPIRED (err u115))
+(define-constant ERR_INVALID_RECOVERY_ADDRESS (err u116))
+
+;; Emergency Recovery Constants
+(define-constant RECOVERY_DELAY_BLOCKS u1008) ;; ~1 week in blocks
+(define-constant RECOVERY_WINDOW_BLOCKS u1440) ;; ~10 days window after delay
 
 ;; Data Variables
 (define-data-var next-tx-id uint u0)
 (define-data-var signature-threshold uint u2)
 (define-data-var transaction-timeout uint u144) ;; ~24 hours in blocks
+(define-data-var recovery-address (optional principal) none)
+(define-data-var recovery-initiated-block (optional uint) none)
 
 ;; Data Maps
 (define-map guardians principal bool)
@@ -69,6 +80,29 @@
   (var-get next-tx-id)
 )
 
+(define-read-only (get-recovery-address)
+  (var-get recovery-address)
+)
+
+(define-read-only (get-recovery-status)
+  (let ((initiated-block (var-get recovery-initiated-block)))
+    (if (is-none initiated-block)
+      {initiated: false, can-execute: false, blocks-remaining: u0}
+      (let ((blocks-since-init (- stacks-block-height (unwrap-panic initiated-block)))
+            (can-execute (and 
+                          (>= blocks-since-init RECOVERY_DELAY_BLOCKS)
+                          (<= blocks-since-init (+ RECOVERY_DELAY_BLOCKS RECOVERY_WINDOW_BLOCKS)))))
+        {
+          initiated: true, 
+          can-execute: can-execute,
+          blocks-remaining: (if (< blocks-since-init RECOVERY_DELAY_BLOCKS)
+                             (- RECOVERY_DELAY_BLOCKS blocks-since-init)
+                             u0)
+        })
+    )
+  )
+)
+
 ;; Private functions
 (define-private (is-valid-amount (amount uint))
   (> amount u0)
@@ -93,6 +127,16 @@
   (let ((current-id (var-get next-tx-id)))
     (var-set next-tx-id (+ current-id u1))
     current-id
+  )
+)
+
+(define-private (is-recovery-window-active)
+  (match (var-get recovery-initiated-block)
+    initiated-block (let ((blocks-elapsed (- stacks-block-height initiated-block)))
+                     (and 
+                       (>= blocks-elapsed RECOVERY_DELAY_BLOCKS)
+                       (<= blocks-elapsed (+ RECOVERY_DELAY_BLOCKS RECOVERY_WINDOW_BLOCKS))))
+    false
   )
 )
 
@@ -121,6 +165,54 @@
     (asserts! (and (> new-threshold u0) (<= new-threshold u10)) ERR_INVALID_THRESHOLD)
     (var-set signature-threshold new-threshold)
     (ok true)
+  )
+)
+
+(define-public (set-recovery-address (new-recovery-address principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (not (is-eq new-recovery-address CONTRACT_OWNER)) ERR_INVALID_RECOVERY_ADDRESS)
+    (var-set recovery-address (some new-recovery-address))
+    (ok true)
+  )
+)
+
+(define-public (initiate-emergency-recovery)
+  (let ((recovery-addr (unwrap! (var-get recovery-address) ERR_INVALID_RECOVERY_ADDRESS)))
+    (asserts! (is-eq tx-sender recovery-addr) ERR_UNAUTHORIZED)
+    (asserts! (is-none (var-get recovery-initiated-block)) ERR_RECOVERY_ALREADY_INITIATED)
+    (var-set recovery-initiated-block (some stacks-block-height))
+    (ok stacks-block-height)
+  )
+)
+
+(define-public (cancel-emergency-recovery)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (is-some (var-get recovery-initiated-block)) ERR_RECOVERY_NOT_INITIATED)
+    (var-set recovery-initiated-block none)
+    (ok true)
+  )
+)
+
+(define-public (execute-emergency-recovery (new-owner principal))
+  (let ((recovery-addr (unwrap! (var-get recovery-address) ERR_INVALID_RECOVERY_ADDRESS))
+        (initiated-block (unwrap! (var-get recovery-initiated-block) ERR_RECOVERY_NOT_INITIATED)))
+    (asserts! (is-eq tx-sender recovery-addr) ERR_UNAUTHORIZED)
+    (asserts! (not (is-eq new-owner recovery-addr)) ERR_INVALID_RECOVERY_ADDRESS)
+    (asserts! (is-recovery-window-active) ERR_RECOVERY_TOO_EARLY)
+    
+    ;; Clear all existing guardians
+    (map-delete guardians CONTRACT_OWNER)
+    
+    ;; Set new owner as guardian
+    (map-set guardians new-owner true)
+    
+    ;; Reset recovery state
+    (var-set recovery-initiated-block none)
+    (var-set recovery-address none)
+    
+    (ok new-owner)
   )
 )
 
