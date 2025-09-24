@@ -4,107 +4,14 @@ A comprehensive secure digital asset management smart contract built on the Stac
 
 ## Overview
 
-Nexus Guardian provides a robust, multi-signature enabled platform for managing digital assets with enhanced security features. The contract implements guardian-based access control, multi-signature transaction approvals, and comprehensive asset management capabilities.
-
-## Features
-
-- **Multi-Signature Security**: Configurable signature thresholds for transaction approvals
-- **Guardian Management**: Add/remove trusted guardians with administrative controls
-- **Asset Tracking**: Comprehensive tracking of different asset types per user
-- **Transaction Timeouts**: Automatic expiration of pending transactions for security
-- **Comprehensive Validation**: Full input validation and error handling
-- **Transparent Operations**: All transactions are fully auditable and traceable
-
-## Contract Functions
-
-### Guardian Management
-- `add-guardian(principal)` - Add a new guardian (owner only)
-- `remove-guardian(principal)` - Remove a guardian (owner only)
-- `get-guardian-status(principal)` - Check if a principal is a guardian
-
-### Asset Management
-- `deposit-asset(amount, asset-type)` - Deposit assets into the contract
-- `withdraw-asset(amount, asset-type)` - Withdraw assets from the contract
-- `get-asset-balance(owner, asset-type)` - Check asset balance
-
-### Transaction Management
-- `initiate-transfer(recipient, amount, asset-type)` - Start a new transfer
-- `sign-transaction(tx-id)` - Sign a pending transaction
-- `execute-transaction(tx-id)` - Execute a fully signed transaction
-- `get-transaction-details(tx-id)` - Get details of a transaction
-
-### Configuration
-- `set-signature-threshold(threshold)` - Set required signatures for transactions
-- `get-signature-threshold()` - Get current signature threshold
-- `get-transaction-timeout()` - Get transaction timeout in blocks
-
-## Security Features
-
-1. **Multi-Signature Approval**: All transfers require multiple guardian signatures
-2. **Time-Based Expiry**: Transactions expire after a configurable timeout
-3. **Guardian Validation**: Only approved guardians can initiate and sign transactions
-4. **Balance Verification**: Comprehensive balance checks before execution
-5. **Replay Protection**: Prevents double-signing and re-execution
-
-## Error Codes
-
-- `u100` - Unauthorized access
-- `u101` - Invalid amount
-- `u102` - Insufficient balance
-- `u103` - Invalid recipient
-- `u104` - Invalid threshold
-- `u105` - Already signed
-- `u106` - Transaction not found
-- `u107` - Insufficient signatures
-- `u108` - Transaction expired
-- `u109` - Invalid guardian
-- `u110` - Guardian limit reached
-- `u111` - Invalid asset type
-
-## Usage Example
-
-```clarity
-;; Add a guardian
-(contract-call? .nexus-guardian add-guardian 'SP1234567890)
-
-;; Deposit assets
-(contract-call? .nexus-guardian deposit-asset u1000 "STX")
-
-;; Initiate transfer
-(contract-call? .nexus-guardian initiate-transfer 'SP0987654321 u100 "STX")
-
-;; Sign transaction
-(contract-call? .nexus-guardian sign-transaction u1)
-
-;; Execute transaction
-(contract-call? .nexus-guardian execute-transaction u1)
-```
-
-## Development
-
-### Prerequisites
-- Clarinet CLI
-- Stacks blockchain environment
-
-### Testing
-```bash
-clarinet check
-clarinet test
-```
-
-# Nexus Guardian
-
-A comprehensive secure digital asset management smart contract built on the Stacks blockchain using Clarity.
-
-## Overview
-
-Nexus Guardian provides a robust, multi-signature enabled platform for managing digital assets with enhanced security features. The contract implements guardian-based access control, multi-signature transaction approvals, emergency recovery mechanisms, and comprehensive asset management capabilities.
+Nexus Guardian provides a robust, multi-signature enabled platform for managing digital assets with enhanced security features. The contract implements guardian-based access control, multi-signature transaction approvals, emergency recovery mechanisms, asset delegation framework, and comprehensive asset management capabilities.
 
 ## Features
 
 - **Multi-Signature Security**: Configurable signature thresholds for transaction approvals
 - **Guardian Management**: Add/remove trusted guardians with administrative controls
 - **Emergency Recovery System**: Time-locked emergency recovery mechanisms for lost guardian access
+- **Asset Delegation Framework**: Temporary delegation of asset management rights to other principals
 - **Asset Tracking**: Comprehensive tracking of different asset types per user
 - **Transaction Timeouts**: Automatic expiration of pending transactions for security
 - **Comprehensive Validation**: Full input validation and error handling
@@ -124,6 +31,15 @@ Nexus Guardian provides a robust, multi-signature enabled platform for managing 
 - `execute-emergency-recovery(new-owner)` - Execute recovery after delay period
 - `get-recovery-address()` - Get current recovery address
 - `get-recovery-status()` - Get recovery process status and timing
+
+### Asset Delegation Framework
+- `create-delegation(delegate, asset-type, max-amount, expiry-block)` - Create a new delegation
+- `revoke-delegation(delegate, asset-type)` - Revoke an existing delegation
+- `use-delegation(delegator, recipient, amount, asset-type)` - Use delegation to transfer assets
+- `get-delegation-details(delegation-id)` - Get delegation information
+- `get-delegation-usage(delegation-id)` - Get current usage of delegation
+- `get-active-delegation(delegator, delegate, asset-type)` - Get active delegation details
+- `get-delegation-remaining-amount(delegation-id)` - Get remaining delegated amount
 
 ### Asset Management
 - `deposit-asset(amount, asset-type)` - Deposit assets into the contract
@@ -145,10 +61,34 @@ Nexus Guardian provides a robust, multi-signature enabled platform for managing 
 
 1. **Multi-Signature Approval**: All transfers require multiple guardian signatures
 2. **Emergency Recovery**: Time-locked recovery system with ~1 week delay and 10-day execution window
-3. **Time-Based Expiry**: Transactions expire after a configurable timeout
-4. **Guardian Validation**: Only approved guardians can initiate and sign transactions
-5. **Balance Verification**: Comprehensive balance checks before execution
-6. **Replay Protection**: Prevents double-signing and re-execution
+3. **Asset Delegation Security**: Time-limited delegations with amount caps and automatic expiry
+4. **Time-Based Expiry**: Transactions expire after a configurable timeout
+5. **Guardian Validation**: Only approved guardians can initiate and sign transactions
+6. **Balance Verification**: Comprehensive balance checks before execution
+7. **Replay Protection**: Prevents double-signing and re-execution
+
+## Asset Delegation Framework
+
+The delegation framework allows asset owners to temporarily grant transfer rights to other principals:
+
+### Delegation Features
+- **Time-Limited**: Delegations have configurable expiry blocks (1-100 days)
+- **Amount-Capped**: Each delegation has a maximum transferable amount
+- **Usage Tracking**: Track how much of the delegation has been used
+- **Revocable**: Delegators can revoke active delegations at any time
+- **Asset-Specific**: Delegations are tied to specific asset types
+
+### Delegation Workflow
+1. **Create**: Asset owner creates delegation with delegate, asset type, max amount, and expiry
+2. **Use**: Delegate can transfer assets within the delegation limits
+3. **Track**: System tracks usage against the delegation limit
+4. **Revoke/Expire**: Delegation ends when revoked by owner or expired
+
+### Use Cases
+- **Temporary Asset Management**: Grant trading rights during travel or unavailability
+- **Limited Authority**: Give specific amounts for defined purposes
+- **Automated Services**: Allow services to operate within predefined limits
+- **Family/Business Management**: Delegate asset management to trusted parties
 
 ## Emergency Recovery Process
 
@@ -179,9 +119,16 @@ The emergency recovery system provides a secure way to recover access if guardia
 - `u114` - Recovery too early
 - `u115` - Recovery expired
 - `u116` - Invalid recovery address
+- `u117` - Delegation already exists
+- `u118` - Delegation not found
+- `u119` - Delegation expired
+- `u120` - Invalid delegate
+- `u121` - Delegation limit exceeded
+- `u122` - Invalid expiry
 
-## Usage Example
+## Usage Examples
 
+### Basic Operations
 ```clarity
 ;; Add a guardian
 (contract-call? .nexus-guardian add-guardian 'SP1234567890)
@@ -200,7 +147,25 @@ The emergency recovery system provides a secure way to recover access if guardia
 
 ;; Execute transaction
 (contract-call? .nexus-guardian execute-transaction u1)
+```
 
+### Asset Delegation
+```clarity
+;; Create delegation for 500 STX, expires in 30 days (~4320 blocks)
+(contract-call? .nexus-guardian create-delegation 'SP1111111111 "STX" u500 u4320)
+
+;; Use delegation to transfer 100 STX
+(contract-call? .nexus-guardian use-delegation 'SP2222222222 'SP3333333333 u100 "STX")
+
+;; Revoke delegation
+(contract-call? .nexus-guardian revoke-delegation 'SP1111111111 "STX")
+
+;; Check delegation status
+(contract-call? .nexus-guardian get-active-delegation 'SP2222222222 'SP1111111111 "STX")
+```
+
+### Emergency Recovery
+```clarity
 ;; Emergency recovery (from recovery address)
 (contract-call? .nexus-guardian initiate-emergency-recovery)
 ```
@@ -211,7 +176,7 @@ The emergency recovery system provides a secure way to recover access if guardia
 - ✅ **Emergency Recovery System** - Implement time-locked emergency recovery mechanisms for lost guardian access
 
 ### Phase 2: Advanced Asset Management
-- **Asset Delegation Framework** - Allow temporary delegation of asset management rights to other principals
+- ✅ **Asset Delegation Framework** - Allow temporary delegation of asset management rights to other principals
 - **Automated Recurring Transfers** - Schedule recurring payments with customizable intervals and conditions
 
 ### Phase 3: Stacks Ecosystem Integration
@@ -246,10 +211,6 @@ clarinet test
 clarinet deploy --network testnet
 ```
 
-## License
-
-MIT License - see LICENSE file for details.
-
 ## Contributing
 
 1. Fork the repository
@@ -265,5 +226,6 @@ This contract handles valuable digital assets. Please:
 - Follow security best practices
 - Report any vulnerabilities responsibly
 - Use the emergency recovery system as a last resort
+- Be cautious with delegation permissions and time limits
 
 For security issues, please contact the maintainers privately before public disclosure.

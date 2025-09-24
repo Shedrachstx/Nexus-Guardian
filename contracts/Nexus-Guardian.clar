@@ -1,5 +1,5 @@
-;; Nexus Guardian - Secure Digital Asset Management
-;; A comprehensive smart contract for secure asset management with multi-signature capabilities
+;; Nexus Guardian - Secure Digital Asset Management with Delegation
+;; A comprehensive smart contract for secure asset management with multi-signature capabilities and delegation
 
 ;; Constants
 (define-constant CONTRACT_OWNER tx-sender)
@@ -20,13 +20,24 @@
 (define-constant ERR_RECOVERY_TOO_EARLY (err u114))
 (define-constant ERR_RECOVERY_EXPIRED (err u115))
 (define-constant ERR_INVALID_RECOVERY_ADDRESS (err u116))
+(define-constant ERR_DELEGATION_EXISTS (err u117))
+(define-constant ERR_DELEGATION_NOT_FOUND (err u118))
+(define-constant ERR_DELEGATION_EXPIRED (err u119))
+(define-constant ERR_INVALID_DELEGATE (err u120))
+(define-constant ERR_DELEGATION_LIMIT_EXCEEDED (err u121))
+(define-constant ERR_INVALID_EXPIRY (err u122))
 
 ;; Emergency Recovery Constants
 (define-constant RECOVERY_DELAY_BLOCKS u1008) ;; ~1 week in blocks
 (define-constant RECOVERY_WINDOW_BLOCKS u1440) ;; ~10 days window after delay
 
+;; Delegation Constants
+(define-constant MAX_DELEGATION_DURATION u144000) ;; ~100 days maximum delegation
+(define-constant MIN_DELEGATION_DURATION u144) ;; ~1 day minimum delegation
+
 ;; Data Variables
 (define-data-var next-tx-id uint u0)
+(define-data-var next-delegation-id uint u0)
 (define-data-var signature-threshold uint u2)
 (define-data-var transaction-timeout uint u144) ;; ~24 hours in blocks
 (define-data-var recovery-address (optional principal) none)
@@ -50,6 +61,21 @@
   }
 )
 (define-map transaction-signatures {tx-id: uint, guardian: principal} bool)
+
+;; Delegation Maps
+(define-map delegations
+  uint
+  {
+    delegator: principal,
+    delegate: principal,
+    asset-type: (string-ascii 20),
+    max-amount: uint,
+    expiry-block: uint,
+    active: bool
+  }
+)
+(define-map delegation-usage {delegation-id: uint} uint)
+(define-map user-delegations {delegator: principal, delegate: principal, asset-type: (string-ascii 20)} uint)
 
 ;; Read-only functions
 (define-read-only (get-guardian-status (guardian principal))
@@ -103,6 +129,38 @@
   )
 )
 
+;; Delegation read-only functions
+(define-read-only (get-delegation-details (delegation-id uint))
+  (map-get? delegations delegation-id)
+)
+
+(define-read-only (get-delegation-usage (delegation-id uint))
+  (default-to u0 (map-get? delegation-usage {delegation-id: delegation-id}))
+)
+
+(define-read-only (get-active-delegation (delegator principal) (delegate principal) (asset-type (string-ascii 20)))
+  (let ((delegation-id (map-get? user-delegations {delegator: delegator, delegate: delegate, asset-type: asset-type})))
+    (match delegation-id
+      id (let ((delegation (map-get? delegations id)))
+           (match delegation
+             del (if (and (get active del) (< stacks-block-height (get expiry-block del)))
+                    (some del)
+                    none)
+             none))
+      none)
+  )
+)
+
+(define-read-only (get-delegation-remaining-amount (delegation-id uint))
+  (match (get-delegation-details delegation-id)
+    delegation (let ((used-amount (get-delegation-usage delegation-id))
+                     (max-amount (get max-amount delegation)))
+                 (if (> max-amount used-amount)
+                    (- max-amount used-amount)
+                    u0))
+    u0)
+)
+
 ;; Private functions
 (define-private (is-valid-amount (amount uint))
   (> amount u0)
@@ -130,6 +188,13 @@
   )
 )
 
+(define-private (increment-delegation-id)
+  (let ((current-id (var-get next-delegation-id)))
+    (var-set next-delegation-id (+ current-id u1))
+    current-id
+  )
+)
+
 (define-private (is-recovery-window-active)
   (match (var-get recovery-initiated-block)
     initiated-block (let ((blocks-elapsed (- stacks-block-height initiated-block)))
@@ -137,6 +202,28 @@
                        (>= blocks-elapsed RECOVERY_DELAY_BLOCKS)
                        (<= blocks-elapsed (+ RECOVERY_DELAY_BLOCKS RECOVERY_WINDOW_BLOCKS))))
     false
+  )
+)
+
+(define-private (is-valid-delegation-duration (expiry-block uint))
+  (let ((duration (- expiry-block stacks-block-height)))
+    (and 
+      (>= duration MIN_DELEGATION_DURATION)
+      (<= duration MAX_DELEGATION_DURATION)
+      (> expiry-block stacks-block-height)
+    )
+  )
+)
+
+(define-private (has-permission-for-asset (user principal) (owner principal) (asset-type (string-ascii 20)) (amount uint))
+  (or 
+    (is-eq user owner)
+    (match (get-active-delegation owner user asset-type)
+      delegation (let ((delegation-id (unwrap-panic (map-get? user-delegations {delegator: owner, delegate: user, asset-type: asset-type})))
+                       (used-amount (get-delegation-usage delegation-id))
+                       (max-amount (get max-amount delegation)))
+                   (>= (- max-amount used-amount) amount))
+      false)
   )
 )
 
@@ -213,6 +300,74 @@
     (var-set recovery-address none)
     
     (ok new-owner)
+  )
+)
+
+;; Delegation functions
+(define-public (create-delegation (delegate principal) (asset-type (string-ascii 20)) (max-amount uint) (expiry-block uint))
+  (let ((delegation-id (increment-delegation-id))
+        (current-balance (get-asset-balance tx-sender asset-type)))
+    (asserts! (is-valid-amount max-amount) ERR_INVALID_AMOUNT)
+    (asserts! (is-valid-asset-type asset-type) ERR_INVALID_ASSET_TYPE)
+    (asserts! (not (is-eq delegate tx-sender)) ERR_INVALID_DELEGATE)
+    (asserts! (is-valid-delegation-duration expiry-block) ERR_INVALID_EXPIRY)
+    (asserts! (>= current-balance max-amount) ERR_INSUFFICIENT_BALANCE)
+    (asserts! (is-none (get-active-delegation tx-sender delegate asset-type)) ERR_DELEGATION_EXISTS)
+    
+    (map-set delegations delegation-id {
+      delegator: tx-sender,
+      delegate: delegate,
+      asset-type: asset-type,
+      max-amount: max-amount,
+      expiry-block: expiry-block,
+      active: true
+    })
+    
+    (map-set delegation-usage {delegation-id: delegation-id} u0)
+    (map-set user-delegations {delegator: tx-sender, delegate: delegate, asset-type: asset-type} delegation-id)
+    
+    (ok delegation-id)
+  )
+)
+
+(define-public (revoke-delegation (delegate principal) (asset-type (string-ascii 20)))
+  (let ((delegation-id (unwrap! (map-get? user-delegations {delegator: tx-sender, delegate: delegate, asset-type: asset-type}) ERR_DELEGATION_NOT_FOUND))
+        (delegation (unwrap! (get-delegation-details delegation-id) ERR_DELEGATION_NOT_FOUND)))
+    (asserts! (is-valid-asset-type asset-type) ERR_INVALID_ASSET_TYPE)
+    (asserts! (not (is-eq delegate tx-sender)) ERR_INVALID_DELEGATE)
+    (asserts! (is-eq tx-sender (get delegator delegation)) ERR_UNAUTHORIZED)
+    (asserts! (get active delegation) ERR_DELEGATION_NOT_FOUND)
+    
+    (map-set delegations delegation-id (merge delegation {active: false}))
+    (map-delete user-delegations {delegator: tx-sender, delegate: delegate, asset-type: asset-type})
+    
+    (ok true)
+  )
+)
+
+(define-public (use-delegation (delegator principal) (recipient principal) (amount uint) (asset-type (string-ascii 20)))
+  (let ((delegation (unwrap! (get-active-delegation delegator tx-sender asset-type) ERR_DELEGATION_NOT_FOUND))
+        (delegation-id (unwrap! (map-get? user-delegations {delegator: delegator, delegate: tx-sender, asset-type: asset-type}) ERR_DELEGATION_NOT_FOUND))
+        (used-amount (get-delegation-usage delegation-id))
+        (delegator-balance (get-asset-balance delegator asset-type))
+        (recipient-balance (get-asset-balance recipient asset-type)))
+    
+    (asserts! (is-valid-amount amount) ERR_INVALID_AMOUNT)
+    (asserts! (is-valid-asset-type asset-type) ERR_INVALID_ASSET_TYPE)
+    (asserts! (not (is-eq recipient tx-sender)) ERR_INVALID_RECIPIENT)
+    (asserts! (not (is-eq recipient delegator)) ERR_INVALID_RECIPIENT)
+    (asserts! (>= delegator-balance amount) ERR_INSUFFICIENT_BALANCE)
+    (asserts! (>= (- (get max-amount delegation) used-amount) amount) ERR_DELEGATION_LIMIT_EXCEEDED)
+    (asserts! (< stacks-block-height (get expiry-block delegation)) ERR_DELEGATION_EXPIRED)
+    
+    ;; Update balances
+    (map-set asset-balances {owner: delegator, asset-type: asset-type} (- delegator-balance amount))
+    (map-set asset-balances {owner: recipient, asset-type: asset-type} (+ recipient-balance amount))
+    
+    ;; Update delegation usage
+    (map-set delegation-usage {delegation-id: delegation-id} (+ used-amount amount))
+    
+    (ok true)
   )
 )
 
